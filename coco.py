@@ -1,9 +1,5 @@
 import os
 import cv2
-import random
-import numpy as np
-from copy import deepcopy
-from skimage.filters import gaussian
 from torchvision.datasets import CocoDetection
 from copy_paste import copy_paste_class
 
@@ -39,11 +35,7 @@ class CocoDetectionCP(CocoDetection):
         self,
         root,
         annFile,
-        transforms,
-        paste_transforms=None,
-        max_paste_objects=None,
-        blend=True,
-        paste_p=0.5
+        transforms
     ):
         super(CocoDetectionCP, self).__init__(
             root, annFile, None, None, transforms
@@ -58,11 +50,6 @@ class CocoDetectionCP(CocoDetection):
                 ids.append(img_id)
         self.ids = ids
 
-        self.paste_transforms = paste_transforms
-        self.max_paste_objects = max_paste_objects
-        self.blend = blend
-        self.paste_p = paste_p
-
     def load_example(self, index):
         img_id = self.ids[index]
         ann_ids = self.coco.getAnnIds(imgIds=img_id)
@@ -73,27 +60,24 @@ class CocoDetectionCP(CocoDetection):
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
         #convert all of the target segmentations to masks
+        #bboxes are expected to be (y1, x1, y2, x2, category_id)
         masks = []
         bboxes = []
-        bbox_classes = []
         for ix, obj in enumerate(target):
             masks.append(self.coco.annToMask(obj))
-            bboxes.append(obj['bbox'])
-            bbox_classes.append(obj['category_id'])
+            bboxes.append(obj['bbox'] + [obj['category_id']])
 
         #pack outputs into a dict
         output = {
             'image': image,
             'masks': masks,
-            'bboxes': bboxes,
-            'bbox_classes': bbox_classes,
+            'bboxes': bboxes
         }
 
         output = self.transforms(**output)
 
         #remove empty masks
         output['masks'] = list(filter(lambda x: x.sum() > 0, output['masks']))
-
         assert (len(output['masks']) == len(output['bboxes']))
 
         return self.transforms(**output)

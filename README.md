@@ -14,7 +14,8 @@ Setup for torchvision datasets and albumentations. Still a WIP; bugs/features le
 The idea is to have a standard torchvision dataset that's decorated to add copy-paste functionality.
 
 The dataset class looks like:
-```
+
+```python
 from copy_paste import copy_paste_class
 from torch.utils.data import Dataset
 
@@ -22,8 +23,10 @@ from torch.utils.data import Dataset
 class SomeVisionDataset(Dataset):
     def __init__(self, ...):
         .....
+
     def __len__(self):
         return length
+
     def load_example(self, idx):
         image_data_dict = load_some_data(idx)
         transformed_data_dict = self.transforms(**image_data_dict)
@@ -34,8 +37,8 @@ The only difference from a regular torchvision dataset is the decorator and the 
 instead of ```__getitem__```.
 
 To compose transforms with copy-paste augmentation (bbox params are optional):
-```
 
+```python
 import albumentations as A
 from albumentations.pytorch.transforms import ToTensorV2
 from copy_paste import CopyPaste
@@ -49,6 +52,6 @@ transform = A.Compose([
       CopyPaste(p=0.5),
       A.Normalize(),
       ToTensorV2(),
-    ], bbox_params=A.BboxParams(format="coco", label_fields=["bbox_classes"])
+    ], bbox_params=A.BboxParams(format="coco")
 )
 ```

@@ -65,7 +65,7 @@ class CocoDetectionCP(CocoDetection):
         bboxes = []
         for ix, obj in enumerate(target):
             masks.append(self.coco.annToMask(obj))
-            bboxes.append(obj['bbox'] + [obj['category_id']])
+            bboxes.append(obj['bbox'] + [obj['category_id']] + [ix])
 
         #pack outputs into a dict
         output = {
@@ -73,11 +73,5 @@ class CocoDetectionCP(CocoDetection):
             'masks': masks,
             'bboxes': bboxes
         }
-
-        output = self.transforms(**output)
-
-        #remove empty masks
-        output['masks'] = list(filter(lambda x: x.sum() > 0, output['masks']))
-        assert (len(output['masks']) == len(output['bboxes']))
 
         return self.transforms(**output)

@@ -6,7 +6,7 @@ import albumentations as A
 from copy import deepcopy
 from skimage.filters import gaussian
 
-#WHY DOES BBOX FORMAT LOOK OFF?
+#BETTER HANDLING OF OCCLUDED BOUNDING BOXES
 
 def image_copy_paste(img, paste_img, alpha, blend=True, sigma=3):
     if alpha is not None:
@@ -33,18 +33,95 @@ def masks_copy_paste(msks, paste_msks, alpha):
 
     return msks
 
-def filter_occluded_bbox(bbox, paste_bboxes):
-    #remove bbox if it's entirely occluded
-    #for pbox in paste_bboxes:
-    pass
+def adjust_occluded_bbox(bbox, paste_bboxes, bbox_format="albumentations"):
+    assert(bbox_format == "albumentations"), \
+    "Only albumentations bbox format is supported!"
+
+    x1, y1, x2, y2 = bbox[:4]
+    tail = bbox[4:]
+    for pbox in paste_bboxes:
+        px1, py1, px2, py2 = pbox[:4]
+
+        #top edge occluded
+        if all([x1 >= px1, x2 <= px2, y1 >= py1, y1 <= py2]):
+            y1 = min(y2, py2)
+
+        #bottom edge occluded
+        if all([x1 >= px1, x2 <= px2, y2 >= py1, y2 <= py2]):
+            y2 = max(y1, py1)
+
+        #left edge occluded
+        if all([y1 >= py1, y2 <= py2, x1 >= px1, x1 <= px2]):
+            x1 = min(x2, px2)
+
+        #right edge occluded
+        if all([y1 >= py1, y2 <= py2, x2 >= px1, x2 <= px2]):
+            x2 = max(x1, px1)
+
+    #entirely occluded boxes collapse to have no area
+    #they look like (x2, x2, y2, y2)
+    return (x1, y1, x2, y2) + tail
+
+def adjust_occluded_bbox(bbox, paste_bboxes, bbox_format="albumentations"):
+    assert(bbox_format == "albumentations"), \
+    "Only albumentations bbox format is supported!"
+
+    x1, y1, x2, y2 = bbox[:4]
+    tail = bbox[4:]
+    for pbox in paste_bboxes:
+        px1, py1, px2, py2 = pbox[:4]
+
+        #top edge occluded
+        if all([x1 >= px1, x2 <= px2, y1 >= py1, y1 <= py2]):
+            y1 = min(y2, py2)
+
+        #bottom edge occluded
+        if all([x1 >= px1, x2 <= px2, y2 >= py1, y2 <= py2]):
+            y2 = max(y1, py1)
+
+        #left edge occluded
+        if all([y1 >= py1, y2 <= py2, x1 >= px1, x1 <= px2]):
+            x1 = min(x2, px2)
+
+        #right edge occluded
+        if all([y1 >= py1, y2 <= py2, x2 >= px1, x2 <= px2]):
+            x2 = max(x1, px1)
+
+    #entirely occluded boxes collapse to have no area
+    #they look like (x2, x2, y2, y2)
+    return (x1, y1, x2, y2) + tail
 
 def bboxes_copy_paste(bboxes, paste_bboxes):
     if paste_bboxes is not None:
-        bboxes = bboxes + paste_bboxes
+        adjusted_bboxes = [adjust_occluded_bbox(bbox, paste_bboxes) for bbox in bboxes]
+
+        #adjust paste_bboxes mask indices to avoid overlap
+        if adjusted_bboxes:
+            max_mask_index = 1 + max([b[-1] for b in adjusted_bboxes])
+        else:
+            max_mask_index = 0
+
+        paste_mask_indices = [max_mask_index + ix for ix in range(len(paste_bboxes))]
+        adjusted_paste_bboxes = []
+        for mi, pbox in zip(paste_mask_indices, paste_bboxes):
+            adjusted_paste_bboxes.append(pbox[:-1] + tuple([mi]))
+
+        bboxes = adjusted_bboxes + adjusted_paste_bboxes
+
     return bboxes
 
 def keypoints_copy_paste(keypoints, paste_keypoints, alpha):
-    #if alpha:
+    #remove occluded keypoints
+    if alpha is not None:
+        visible_keypoints = []
+        for kp in keypoints:
+            x, y = kp[:2]
+            tail = kp[2:]
+            if alpha[int(y), int(x)] == 0:
+                visible_keypoints.append(kp)
+
+        keypoints = visible_keypoints + paste_keypoints
+
     return keypoints
 
 class CopyPaste(A.DualTransform):
@@ -95,16 +172,18 @@ class CopyPaste(A.DualTransform):
         bboxes = params.get("paste_bboxes", None)
         keypoints = params.get("paste_keypoints", None)
 
-        #number of objects
+        #number of objects: n_bboxes <= n_masks because of automatic removal
+        n_objects = len(bboxes) if bboxes is not None else len(masks)
+
+        #paste all objects if no restrictions
+        n_select = n_objects
         if self.pct_objects_paste:
-            n_objects = max(1, int(len(masks) * self.pct_objects_paste))
-        elif self.max_paste_objects:
-            n_objects = min(len(masks), self.max_paste_objects)
-        else:
-            raise Exception("pct_objects_paste and max_paste_objects cannot both be None.")
+            n_select = int(n_select * self.pct_objects_paste)
+        if self.max_paste_objects:
+            n_select = min(n_select, self.max_paste_objects)
 
         #no objects condition
-        if n_objects == 0:
+        if n_select == 0:
             return {
                 "paste_img": None,
                 "alpha": None,
@@ -117,19 +196,22 @@ class CopyPaste(A.DualTransform):
 
         #select objects
         objs_to_paste = np.random.choice(
-            range(0, len(masks)), size=n_objects, replace=False
+            range(0, n_objects), size=n_select, replace=False
         )
+
+        #take the bboxes
+        if bboxes:
+            bboxes = [bboxes[idx] for idx in objs_to_paste]
+
+            #the last label in bboxes is the index of corresponding mask
+            mask_indices = [bbox[-1] for bbox in bboxes]
 
         #create alpha by combining all the objects into
         #a single binary mask
-        masks = [masks[idx] for idx in objs_to_paste]
+        masks = [masks[idx] for idx in mask_indices]
         alpha = masks[0] > 0
         for mask in masks[1:]:
             alpha += mask > 0
-
-        #only keep chosen subset
-        if bboxes:
-            bboxes = [bboxes[idx] for idx in objs_to_paste]
 
         return {
             "paste_img": image,
@@ -137,8 +219,7 @@ class CopyPaste(A.DualTransform):
             "paste_msk": None,
             "paste_msks": masks,
             "paste_bboxes": bboxes,
-            "paste_keypoints": keypoints,
-            "objs_to_paste": objs_to_paste
+            "paste_keypoints": keypoints
         }
 
     @property
@@ -247,6 +328,7 @@ def copy_paste_class(dataset_class):
 
             img_data = self.copy_paste(**img_data, **paste_img_data)
             img_data = self.post_transforms(**img_data)
+            img['paste_index'] = paste_idx
 
         return img_data
 

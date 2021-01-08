@@ -1,16 +1,34 @@
 # Copy-Paste
 Unofficial implementation of the copy-paste augmentation from [Simple Copy-Paste is a Strong Data Augmentation Method for Instance Segmentation](https://arxiv.org/abs/2012.07177v1).
 
-Setup for torchvision datasets and albumentations. Still a WIP; bugs/features left to hammer out. The target is to have a stable release by January 8th, 2021 (I recommend checking back then before trusting this code as anything other than a reference).
+The augmentation function is built to integrate easily with albumentations. An example for creating a compatible torchvision dataset is given for COCO. Core functionality for image, masks, and bounding boxes is finished; keypoints are not yet supported. In general, you can use the CopyPaste augmentation just as you would any other albumentations augmentation function. There are a few usage limitations of note.
 
-## Current status
-- [x] Copy and paste of object instances from instance-separated masks
-- [ ] Copy and paste of object instances from a single segmentation mask
-- [ ] Albumentations with tensorflow support
+<figure>
+  <img src="./example.png"></img>
+</figure>
 
-## Basic Usage
+## Usage Notes
 
-The idea is to have a standard torchvision dataset that's decorated to add copy-paste functionality.
+1. BboxParams cannot have label_fields. To attach class labels to a bounding box, directly append it to the bounding box coordinates. (I.e. (x1, y1, x2, y2, class_id)).
+2. Bounding boxes passed to the CopyPaste augmentation must also include the index of the corresponding mask in the 'masks' list. (I.e. the bounding box looks like (x1, y1, x2, y2, class_id, mask_index)). An example is given for COCO.
+3. The CopyPaste augmentation expects 6 keyword arguments instead of three:
+
+```python
+output = transforms(image=image, masks=masks, bboxes=bboxes)
+--->instead
+output = transforms(
+    image=image, masks=masks, bboxes=bboxes,
+    paste_image=paste_image, paste_masks=paste_masks, paste_bboxes=paste_bboxes
+  )
+```
+
+4. After pasting objects, the original bounding boxes may be occluded. To make things easier,
+the original bounding boxes are just extracted from the updated masks.
+
+## Integration with Torchvision datasets
+
+The idea is to have a standard torchvision dataset that's decorated to add seamlessly integrate the
+copy-paste functionality.
 
 The dataset class looks like:
 
@@ -35,7 +53,7 @@ class SomeVisionDataset(Dataset):
 The only difference from a regular torchvision dataset is the decorator and the ```load_example``` method
 instead of ```__getitem__```.
 
-To compose transforms with copy-paste augmentation (bbox params are optional):
+To compose transforms with copy-paste augmentation (bbox params are NOT optional):
 
 
 ```python

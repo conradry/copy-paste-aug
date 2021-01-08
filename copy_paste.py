@@ -6,9 +6,7 @@ import albumentations as A
 from copy import deepcopy
 from skimage.filters import gaussian
 
-#BETTER HANDLING OF OCCLUDED BOUNDING BOXES
-
-def image_copy_paste(img, paste_img, alpha, blend=True, sigma=3):
+def image_copy_paste(img, paste_img, alpha, blend=True, sigma=1):
     if alpha is not None:
         if blend:
             alpha = gaussian(alpha, sigma=sigma, preserve_range=True)
@@ -20,84 +18,52 @@ def image_copy_paste(img, paste_img, alpha, blend=True, sigma=3):
 
     return img
 
-def mask_copy_paste(msk, paste_msk, alpha):
+def mask_copy_paste(mask, paste_mask, alpha):
     raise NotImplementedError
 
-def masks_copy_paste(msks, paste_msks, alpha):
+def masks_copy_paste(masks, paste_masks, alpha):
     if alpha is not None:
         #eliminate pixels that will be pasted over
-        msks = [
-            np.logical_and(msk, np.logical_xor(msk, alpha)).astype(np.uint8) for msk in msks
+        masks = [
+            np.logical_and(mask, np.logical_xor(mask, alpha)).astype(np.uint8) for mask in masks
         ]
-        msks.extend(paste_msks)
+        masks.extend(paste_masks)
 
-    return msks
+    return masks
 
-def adjust_occluded_bbox(bbox, paste_bboxes, bbox_format="albumentations"):
-    assert(bbox_format == "albumentations"), \
-    "Only albumentations bbox format is supported!"
+def extract_bboxes(masks):
+    bboxes = []
+    h, w = masks[0].shape
+    for mask in masks:
+        yindices = np.where(np.any(mask, axis=0))[0]
+        xindices = np.where(np.any(mask, axis=1))[0]
+        if yindices.shape[0]:
+            y1, y2 = yindices[[0, -1]]
+            x1, x2 = xindices[[0, -1]]
+            y2 += 1
+            x2 += 1
+            y1 /= h
+            y2 /= h
+            x1 /= w
+            x2 /= w
+        else:
+            y1, x1, y2, x2 = 0, 0, 0, 0
 
-    x1, y1, x2, y2 = bbox[:4]
-    tail = bbox[4:]
-    for pbox in paste_bboxes:
-        px1, py1, px2, py2 = pbox[:4]
+        bboxes.append((y1, x1, y2, x2))
 
-        #top edge occluded
-        if all([x1 >= px1, x2 <= px2, y1 >= py1, y1 <= py2]):
-            y1 = min(y2, py2)
+    return bboxes
 
-        #bottom edge occluded
-        if all([x1 >= px1, x2 <= px2, y2 >= py1, y2 <= py2]):
-            y2 = max(y1, py1)
-
-        #left edge occluded
-        if all([y1 >= py1, y2 <= py2, x1 >= px1, x1 <= px2]):
-            x1 = min(x2, px2)
-
-        #right edge occluded
-        if all([y1 >= py1, y2 <= py2, x2 >= px1, x2 <= px2]):
-            x2 = max(x1, px1)
-
-    #entirely occluded boxes collapse to have no area
-    #they look like (x2, x2, y2, y2)
-    return (x1, y1, x2, y2) + tail
-
-def adjust_occluded_bbox(bbox, paste_bboxes, bbox_format="albumentations"):
-    assert(bbox_format == "albumentations"), \
-    "Only albumentations bbox format is supported!"
-
-    x1, y1, x2, y2 = bbox[:4]
-    tail = bbox[4:]
-    for pbox in paste_bboxes:
-        px1, py1, px2, py2 = pbox[:4]
-
-        #top edge occluded
-        if all([x1 >= px1, x2 <= px2, y1 >= py1, y1 <= py2]):
-            y1 = min(y2, py2)
-
-        #bottom edge occluded
-        if all([x1 >= px1, x2 <= px2, y2 >= py1, y2 <= py2]):
-            y2 = max(y1, py1)
-
-        #left edge occluded
-        if all([y1 >= py1, y2 <= py2, x1 >= px1, x1 <= px2]):
-            x1 = min(x2, px2)
-
-        #right edge occluded
-        if all([y1 >= py1, y2 <= py2, x2 >= px1, x2 <= px2]):
-            x2 = max(x1, px1)
-
-    #entirely occluded boxes collapse to have no area
-    #they look like (x2, x2, y2, y2)
-    return (x1, y1, x2, y2) + tail
-
-def bboxes_copy_paste(bboxes, paste_bboxes):
+def bboxes_copy_paste(bboxes, paste_bboxes, masks, alpha):
     if paste_bboxes is not None:
-        adjusted_bboxes = [adjust_occluded_bbox(bbox, paste_bboxes) for bbox in bboxes]
+        masks = masks_copy_paste(masks, paste_masks=[], alpha=alpha)
+        adjusted_bboxes = extract_bboxes(masks)
+
+        #append bbox tails (classes, etc.)
+        adjusted_bboxes = [bbox + tail[4:] for bbox, tail in zip(adjusted_bboxes, bboxes)]
 
         #adjust paste_bboxes mask indices to avoid overlap
         if adjusted_bboxes:
-            max_mask_index = 1 + max([b[-1] for b in adjusted_bboxes])
+            max_mask_index = len(masks)
         else:
             max_mask_index = 0
 
@@ -149,6 +115,7 @@ class CopyPaste(A.DualTransform):
     @property
     def targets_as_params(self):
         return [
+            "masks",
             "paste_image",
             #"paste_mask",
             "paste_masks",
@@ -185,10 +152,11 @@ class CopyPaste(A.DualTransform):
         #no objects condition
         if n_select == 0:
             return {
+                "param_masks": params["masks"],
                 "paste_img": None,
                 "alpha": None,
-                "paste_msk": None,
-                "paste_msks": None,
+                "paste_mask": None,
+                "paste_masks": None,
                 "paste_bboxes": None,
                 "paste_keypoints": None,
                 "objs_to_paste": []
@@ -202,22 +170,23 @@ class CopyPaste(A.DualTransform):
         #take the bboxes
         if bboxes:
             bboxes = [bboxes[idx] for idx in objs_to_paste]
-
             #the last label in bboxes is the index of corresponding mask
             mask_indices = [bbox[-1] for bbox in bboxes]
 
         #create alpha by combining all the objects into
         #a single binary mask
         masks = [masks[idx] for idx in mask_indices]
+
         alpha = masks[0] > 0
         for mask in masks[1:]:
             alpha += mask > 0
 
         return {
+            "param_masks": params["masks"],
             "paste_img": image,
             "alpha": alpha,
-            "paste_msk": None,
-            "paste_msks": masks,
+            "paste_mask": None,
+            "paste_masks": masks,
             "paste_bboxes": bboxes,
             "paste_keypoints": keypoints
         }
@@ -249,14 +218,14 @@ class CopyPaste(A.DualTransform):
             img, paste_img, alpha, blend=self.blend, sigma=self.sigma
         )
 
-    def apply_to_mask(self, msk, paste_msk, alpha, **params):
-        return mask_copy_paste(msk, paste_msk, alpha)
+    def apply_to_mask(self, mask, paste_mask, alpha, **params):
+        return mask_copy_paste(mask, paste_mask, alpha)
 
-    def apply_to_masks(self, msks, paste_msks, alpha, **params):
-        return masks_copy_paste(msks, paste_msks, alpha)
+    def apply_to_masks(self, masks, paste_masks, alpha, **params):
+        return masks_copy_paste(masks, paste_masks, alpha)
 
-    def apply_to_bboxes(self, bboxes, paste_bboxes, **params):
-        return bboxes_copy_paste(bboxes, paste_bboxes)
+    def apply_to_bboxes(self, bboxes, paste_bboxes, param_masks, alpha, **params):
+        return bboxes_copy_paste(bboxes, paste_bboxes, param_masks, alpha)
 
     def apply_to_keypoints(self, keypoints, paste_keypoints, alpha, **params):
         raise NotImplementedError
@@ -328,7 +297,7 @@ def copy_paste_class(dataset_class):
 
             img_data = self.copy_paste(**img_data, **paste_img_data)
             img_data = self.post_transforms(**img_data)
-            img['paste_index'] = paste_idx
+            img_data['paste_index'] = paste_idx
 
         return img_data
 

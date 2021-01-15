@@ -58,6 +58,16 @@ def bboxes_copy_paste(bboxes, paste_bboxes, masks, alpha):
         masks = masks_copy_paste(masks, paste_masks=[], alpha=alpha)
         adjusted_bboxes = extract_bboxes(masks)
 
+        #only keep the bounding boxes for objects listed in bboxes
+        mask_indices = [box[-1] for box in bboxes]
+        try:
+            adjusted_bboxes = [adjusted_bboxes[idx] for idx in mask_indices]
+        except:
+            #this case only happens for paste_bboxes on the second
+            #run of this function. For right now this is an unfortunate
+            #hack.
+            return bboxes
+
         #append bbox tails (classes, etc.)
         adjusted_bboxes = [bbox + tail[4:] for bbox, tail in zip(adjusted_bboxes, bboxes)]
 
@@ -196,7 +206,7 @@ class CopyPaste(A.DualTransform):
         return [
             "paste_image",
             "paste_mask",
-            "paste_masks",
+            "paste_masks"
         ]
 
     def apply_with_params(self, params, force_apply=False, **kwargs):  # skipcq: PYL-W0613

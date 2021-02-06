@@ -73,5 +73,5 @@ class CocoDetectionCP(CocoDetection):
             'masks': masks,
             'bboxes': bboxes
         }
-
+        
         return self.transforms(**output)

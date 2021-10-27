@@ -33,6 +33,10 @@ def masks_copy_paste(masks, paste_masks, alpha):
 
 def extract_bboxes(masks):
     bboxes = []
+    # allow for case of no masks
+    if len(masks) == 0:
+        return bboxes
+    
     h, w = masks[0].shape
     for mask in masks:
         yindices = np.where(np.any(mask, axis=0))[0]

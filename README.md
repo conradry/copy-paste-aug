@@ -14,8 +14,10 @@ The augmentation function is built to integrate easily with albumentations. An e
 3. The CopyPaste augmentation expects 6 keyword arguments instead of three:
 
 ```python
+# typical albumentations transform
 output = transforms(image=image, masks=masks, bboxes=bboxes)
---->instead
+
+# for the copy paste transform
 output = transforms(
     image=image, masks=masks, bboxes=bboxes,
     paste_image=paste_image, paste_masks=paste_masks, paste_bboxes=paste_bboxes
@@ -27,8 +29,7 @@ the original bounding boxes are just extracted from the updated masks.
 
 ## Integration with Torchvision datasets
 
-The idea is to have a standard torchvision dataset that's decorated to add seamlessly integrate the
-copy-paste functionality.
+The idea is to have a standard torchvision dataset that's decorated for copy-paste functionality.
 
 The dataset class looks like:
 
@@ -53,8 +54,7 @@ class SomeVisionDataset(Dataset):
 The only difference from a regular torchvision dataset is the decorator and the ```load_example``` method
 instead of ```__getitem__```.
 
-To compose transforms with copy-paste augmentation (bbox params are NOT optional):
-
+To compose transforms with copy-paste augmentation:
 
 ```python
 import albumentations as A
@@ -70,3 +70,5 @@ transform = A.Compose([
     ], bbox_params=A.BboxParams(format="coco")
 )
 ```
+
+**Note: bbox params are NOT optional!**
